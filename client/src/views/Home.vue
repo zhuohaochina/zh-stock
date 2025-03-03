@@ -1,9 +1,92 @@
 <template>
   <div class="container">
-    <!-- 使用简单轮播图组件 -->
-    <simple-carousel></simple-carousel>
-    
     <div class="main-content">
+      <!-- SQL查询块 -->
+      <a-card class="sql-card" :bordered="false">
+        <template #title>
+          <div class="card-header">
+            <span><code-outlined /> SQL查询</span>
+            <div class="header-right">
+              <div class="table-info" v-if="sqlTableColumns.length > 0">
+                <a-tag color="default">
+                  共 {{ sqlTotal }} 条记录
+                </a-tag>
+              </div>
+            </div>
+          </div>
+        </template>
+        
+        <a-textarea
+          v-model:value="sqlQuery"
+          :rows="4"
+          placeholder="请输入SQL查询语句，例如: SELECT * FROM table_name"
+          :maxlength="1000"
+          show-count
+        />
+        <div class="sql-buttons">
+          <a-button type="primary" @click="executeSql" :loading="sqlLoading">
+            执行查询
+          </a-button>
+          <a-button @click="clearSql" style="margin-left: 8px">
+            清空
+          </a-button>
+        </div>
+        
+        <!-- SQL查询结果表格 -->
+        <div v-if="sqlTableColumns.length > 0" class="sql-table">
+          <!-- 添加筛选功能说明 -->
+          <div v-if="Object.keys(filterInfo).length > 0 || Object.keys(searchKeywords).length > 0" class="filter-info">
+            <a-alert type="info" show-icon>
+              <template #message>
+                当前筛选条件已应用于所有数据，而非仅当前页面。
+                <a-button type="link" size="small" @click="clearAllFilters">清除所有筛选</a-button>
+              </template>
+            </a-alert>
+          </div>
+
+          <a-table
+            :dataSource="sqlTableData"
+            :columns="sqlAntTableColumns"
+            :pagination="{
+              current: sqlPagination.current,
+              pageSize: sqlPagination.pageSize,
+              total: sqlTotal,
+              showSizeChanger: true,
+              showQuickJumper: true,
+              pageSizeOptions: ['10', '20', '50', '100'],
+              showTotal: total => `共 ${total} 条记录`,
+              onChange: handleSqlPageChange,
+              onShowSizeChange: handleSqlSizeChange,
+              size: 'small',
+              position: ['bottomCenter']
+            }"
+            :scroll="{ x: true }"
+            size="small"
+            bordered
+            :loading="sqlLoading"
+            rowKey="rowIndex"
+            :rowClassName="(record, index) => (index % 2 === 1 ? 'table-striped' : '')"
+          >
+            <template #bodyCell="{ column, text }">
+              <template v-if="column?.ellipsis">
+                <a-tooltip :title="text">
+                  <span class="ellipsis-cell">{{ text || '-' }}</span>
+                </a-tooltip>
+              </template>
+              <template v-else>
+                <span>{{ text || '-' }}</span>
+              </template>
+            </template>
+            <template #emptyText>
+              <a-empty 
+                description="暂无数据" 
+                :image="Empty.PRESENTED_IMAGE_SIMPLE"
+              />
+            </template>
+          </a-table>
+        </div>
+      </a-card>
+
       <!-- 上传区域（包含Excel上传和动态表列表） -->
       <a-card class="upload-all-card" :bordered="false">
         <template #title>
@@ -14,39 +97,14 @@
         
         <div class="upload-content">
           <!-- 上传Excel部分 -->
-          <div class="upload-section">
-            <!-- 动态表创建选项 -->
-            <div class="dynamic-table-options">
-              <a-checkbox v-model:checked="createDynamicTable" class="option-checkbox">
-                <span class="option-label">根据Excel列动态创建表</span>
-              </a-checkbox>
-              
-              <div v-if="createDynamicTable" class="table-options">
-                <a-input 
-                  v-model:value="tableName" 
-                  placeholder="表名称（默认为demo）" 
-                  class="table-name-input">
-                  <template #prefix><file-outlined /></template>
-                </a-input>
-                
-                <a-checkbox v-model:checked="forceRecreate" class="option-checkbox">
-                  <span class="option-label">如果表已存在，强制重建</span>
-                </a-checkbox>
-              </div>
-            </div>
-            
+          <div class="upload-section">            
             <a-upload-dragger
               name="file"
-              :action="'/api/upload'"
-              :data="uploadData"
-              :headers="{
-                'accept': 'application/json'
-              }"
               :multiple="false"
               :maxCount="1"
               :fileList="fileList"
-              :beforeUpload="beforeUpload"
-              @change="handleUploadChange"
+              :beforeUpload="beforeUploadHandler"
+              :customRequest="customUploadRequest"
               accept=".xlsx,.xls"
               class="upload-excel">
               <p class="ant-upload-drag-icon">
@@ -58,11 +116,14 @@
               <p class="ant-upload-hint">
                 请上传Excel文件（.xlsx或.xls格式）
               </p>
+              <p class="ant-upload-hint" style="color: #ff4d4f; font-weight: bold;">
+                注意: 选择文件后，将弹出对话框确认表名
+              </p>
             </a-upload-dragger>
           </div>
 
           <!-- 动态表列表部分 -->
-          <div v-if="dynamicTables.length > 0" class="tables-section">
+          <div class="tables-section" v-if="dynamicTables.length > 0">
             <div class="section-header">
               <span><database-outlined /> 动态创建的表</span>
               <a-tag color="success">{{ dynamicTables.length }}个表</a-tag>
@@ -110,8 +171,75 @@
               </template>
             </a-table>
           </div>
+
+          <!-- 当没有动态表时显示空状态 -->
+          <div class="tables-section" v-else>
+            <div class="section-header">
+              <span><database-outlined /> 动态创建的表</span>
+              <a-tag color="default">0个表</a-tag>
+            </div>
+            <div class="empty-tables">
+              <a-empty description="暂无动态表" :image="Empty.PRESENTED_IMAGE_SIMPLE" />
+            </div>
+          </div>
         </div>
       </a-card>
+      
+      <!-- 添加表名确认对话框 -->
+      <a-modal
+        v-model:visible="tableNameModalVisible"
+        title="确认表名"
+        @ok="confirmUpload"
+        @cancel="cancelUpload"
+        :confirmLoading="uploadLoading"
+      >
+        <a-alert
+          v-if="selectedFile"
+          type="info"
+          show-icon
+          style="margin-bottom: 16px"
+        >
+          <template #message>
+            已选择文件: {{ selectedFile?.name }}
+          </template>
+        </a-alert>
+        
+        <a-form :model="uploadForm" layout="vertical">
+          <a-form-item
+            label="表名"
+            name="tableName"
+            :rules="[{ required: true, message: '请输入表名!' }]"
+          >
+            <a-input 
+              v-model:value="uploadForm.tableName" 
+              placeholder="请输入表名">
+              <template #prefix><file-outlined /></template>
+            </a-input>
+          </a-form-item>
+          
+          <a-form-item name="createDynamicTable" :wrapper-col="{ offset: 0 }">
+            <a-checkbox v-model:checked="uploadForm.createDynamicTable">
+              根据Excel列动态创建表
+            </a-checkbox>
+          </a-form-item>
+          
+          <div class="table-name-warning" v-if="isTableLocked(uploadForm.tableName)">
+            <a-alert
+              type="error"
+              show-icon
+              message="警告：此表已被锁定，无法覆盖"
+            />
+          </div>
+          
+          <div class="table-name-info" v-else-if="uploadForm.tableName">
+            <a-alert
+              type="warning"
+              show-icon
+              message="注意：如果表已存在，将会自动重建覆盖原表数据"
+            />
+          </div>
+        </a-form>
+      </a-modal>
       
       <!-- 数据展示区域 -->
       <a-card v-if="tableColumns.length > 0" class="data-card" :bordered="false">
@@ -119,24 +247,6 @@
           <div class="card-header">
             <span><bar-chart-outlined /> 数据展示</span>
             <div class="header-right">
-              <!-- 添加搜索框 -->
-              <div class="search-box">
-                <div class="search-container">
-                  <a-select
-                    v-model:value="selectedSearchColumn"
-                    style="width: 150px; margin-right: 8px;"
-                    placeholder="选择搜索列"
-                    :options="searchColumnOptions"
-                  />
-                  <a-input-search
-                    v-model:value="globalSearchKeyword"
-                    placeholder="输入关键字进行搜索"
-                    style="width: 300px"
-                    @search="handleGlobalSearch"
-                    :loading="tableLoading"
-                  />
-                </div>
-              </div>
               <div class="table-info">
                 <a-tag v-if="currentTableName" color="blue">
                   表名: {{ currentTableName }}
@@ -152,6 +262,49 @@
           </div>
         </template>
         
+        <!-- 添加修改对话框 -->
+        <a-modal
+          v-model:visible="editModalVisible"
+          title="修改数据"
+          @ok="handleEditOk"
+          @cancel="handleEditCancel"
+          :confirmLoading="tableLoading"
+        >
+          <a-form :model="editForm" layout="vertical">
+            <template v-for="col in tableColumns" :key="col.prop">
+              <a-form-item
+                v-if="col.prop !== 'id'"
+                :label="col.label"
+                :name="col.prop"
+              >
+                <a-input v-model:value="editForm[col.prop]" />
+              </a-form-item>
+            </template>
+          </a-form>
+        </a-modal>
+
+        <!-- 搜索区域 -->
+        <div class="search-area">
+          <div class="search-container">
+            <a-select
+              v-model:value="selectedSearchColumn"
+              style="width: 180px; margin-right: 12px; height: 46px;"
+              placeholder="选择搜索列"
+              :options="searchColumnOptions"
+              size="large"
+            />
+            <a-input-search
+              v-model:value="globalSearchKeyword"
+              placeholder="输入关键字进行搜索"
+              style="width: 420px; height: 46px;"
+              @search="handleGlobalSearch"
+              :loading="tableLoading"
+              size="large"
+              enter-button
+            />
+          </div>
+        </div>
+
         <!-- 筛选功能说明 -->
         <div v-if="Object.keys(filterInfo).length > 0 || Object.keys(searchKeywords).length > 0" class="filter-info">
           <a-alert type="info" show-icon>
@@ -169,60 +322,45 @@
           v-else
           :dataSource="tableData"
           :columns="antTableColumns"
-          :pagination="false"
+          :pagination="{
+            current: currentPage,
+            pageSize: pageSize,
+            total: total,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            showTotal: total => `共 ${total} 条记录`,
+            onChange: handlePageChange,
+            onShowSizeChange: handleSizeChange,
+            size: 'small',
+            position: ['bottomCenter']
+          }"
+          :scroll="{ x: true }"
           bordered
           :loading="tableLoading"
-          :rowKey="record => record.id || record.rowIndex"
+          rowKey="rowIndex"
+          :rowClassName="(record, index) => (index % 2 === 1 ? 'table-striped' : '')"
           @change="handleTableChange"
           :customFilterDropdown="true"
           :remote="true"
         >
-          <template #bodyCell="{ column, record }">
+          <template #bodyCell="{ column, text, record }">
+            <template v-if="column?.ellipsis">
+              <a-tooltip :title="text">
+                <span class="ellipsis-cell">{{ text || '-' }}</span>
+              </a-tooltip>
+            </template>
             <template v-if="column.key === 'action'">
-              <a-button type="primary" size="small" @click="() => handleEdit(record)">
+              <a-button type="primary" size="small" @click="handleEdit(record)">
                 <template #icon><edit-outlined /></template>
                 修改
               </a-button>
             </template>
+            <template v-else>
+              <span>{{ text || '-' }}</span>
+            </template>
           </template>
         </a-table>
-        
-        <div class="pagination-container">
-          <a-pagination
-            v-model:current="currentPage"
-            v-model:pageSize="pageSize"
-            :total="total"
-            :pageSizeOptions="[10, 20, 50, 100]"
-            show-size-changer
-            show-quick-jumper
-            @change="handlePageChange"
-            @showSizeChange="handleSizeChange"
-          />
-        </div>
-        
-        <!-- 添加修改弹窗 -->
-        <a-modal
-          v-model:visible="editModalVisible"
-          title="修改数据"
-          @ok="handleEditOk"
-          @cancel="handleEditCancel"
-          :confirmLoading="tableLoading"
-        >
-          <a-form layout="vertical">
-            <a-form-item
-              v-for="col in tableColumns"
-              :key="col.prop"
-              :label="col.label"
-            >
-              <template v-if="col.prop !== 'id' && col.prop !== 'created_at' && col.prop !== 'updated_at'">
-                <a-input
-                  v-model:value="editForm[col.prop]"
-                  :placeholder="`请输入${col.label}`"
-                />
-              </template>
-            </a-form-item>
-          </a-form>
-        </a-modal>
       </a-card>
       
       <!-- 无数据提示 -->
@@ -256,12 +394,12 @@ import {
   LockOutlined,
   UnlockOutlined,
   UpOutlined,
-  EditOutlined
+  EditOutlined,
+  CodeOutlined,
+  QuestionCircleOutlined
 } from '@ant-design/icons-vue'
-import { message, Modal } from 'ant-design-vue'
+import { message, Modal, Empty } from 'ant-design-vue'
 import axios from 'axios'
-// 导入轮播图组件
-import SimpleCarousel from '../components/SimpleCarousel.vue'
 
 // 配置axios的基础URL
 axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL
@@ -279,7 +417,6 @@ const currentTableName = ref('')
 // 动态表创建选项
 const createDynamicTable = ref(true)
 const tableName = ref('demo')
-const forceRecreate = ref(false)
 
 // 添加表格加载状态
 const tableLoading = ref(false)
@@ -348,53 +485,14 @@ const sortInfo = ref({
 
 // 构建表格的列配置
 const antTableColumns = computed(() => {
-  const columns = tableColumns.value.map(col => {
-    // 获取列的唯一值，用于构建筛选器选项
-    let filterValues = [];
-    if (tableData.value.length > 0) {
-      // 提取该列所有不同的值
-      const values = new Set();
-      tableData.value.forEach(row => {
-        if (row[col.prop] !== undefined && row[col.prop] !== null) {
-          values.add(row[col.prop].toString());
-        }
-      });
-      filterValues = Array.from(values).map(value => ({ text: value, value }));
-    }
-
-    return {
-      title: col.label,
-      dataIndex: col.prop,
-      key: col.prop,
-      align: 'center',
-      ellipsis: true,
-      minWidth: 120,
-      sorter: true,  // 简化为true，让后端处理排序逻辑
-      // 添加筛选功能
-      filters: filterValues,
-      // 启用服务端筛选
-      filterMode: 'menu',
-      // 启用自定义筛选搜索
-      filterSearch: true,
-      // 禁用本地筛选
-      onFilter: null, // 不在前端过滤，由后端处理
-      filteredValue: filterInfo.value[col.prop] || null,
-      // 显式设置为不要在前端进行筛选处理
-      filter: {
-        // 强制使用服务端筛选
-        filters: filterValues,
-        filterSearch: true,
-        menus: filterValues
-      },
-      // 防止前端自动处理筛选
-      onFilterDropdownVisibleChange: (visible) => {
-        if (!visible) {
-          // 当筛选下拉框关闭时，确保触发handleTableChange
-          console.log('筛选下拉框关闭，准备发送筛选请求到服务器');
-        }
-      }
-    }
-  })
+  const columns = tableColumns.value.map(col => ({
+    title: col.label,
+    dataIndex: col.prop,
+    key: col.prop,
+    align: 'center',
+    minWidth: 120,
+    sorter: true
+  }));
   
   // 添加操作列
   columns.push({
@@ -403,10 +501,10 @@ const antTableColumns = computed(() => {
     width: 120,
     fixed: 'right',
     align: 'center'
-  })
+  });
   
-  return columns
-})
+  return columns;
+});
 
 // 检查表是否被锁定
 const isTableLocked = (tableName) => {
@@ -414,24 +512,6 @@ const isTableLocked = (tableName) => {
   const table = dynamicTables.value.find(t => t.name === tableName);
   return Boolean(table && table.locked); // 确保返回布尔值
 }
-
-// 上传数据
-const uploadData = computed(() => {
-  const data = {
-    createDynamicTable: createDynamicTable.value.toString(),
-    tableName: tableName.value || 'demo',
-    forceRecreate: forceRecreate.value.toString(),
-    // 添加表锁定状态到上传数据，确保始终是布尔值的字符串表示
-    targetTableLocked: String(isTableLocked(tableName.value))
-  };
-  
-  // 如果表被锁定，添加警告
-  if (createDynamicTable.value && isTableLocked(tableName.value)) {
-    console.warn(`警告: 尝试上传数据到锁定的表 "${tableName.value}"`);
-  }
-  
-  return data;
-})
 
 // 获取所有动态表
 const fetchDynamicTables = async () => {
@@ -490,12 +570,21 @@ const viewTableData = async (tableName) => {
 
 // 获取表数据
 const fetchTableData = async () => {
-  if (!currentTableName.value) return
+  if (!currentTableName.value) return;
   
-  // 显示表格加载状态
-  tableLoading.value = true
+  tableLoading.value = true;
   
   try {
+    console.log('正在获取表数据，参数:', {
+      tableName: currentTableName.value,
+      page: currentPage.value,
+      pageSize: pageSize.value,
+      sortField: sortInfo.value.field,
+      sortOrder: sortInfo.value.order,
+      filters: filterInfo.value,
+      searchKeywords: searchKeywords.value
+    });
+
     const response = await axios.get(`/api/tables/${currentTableName.value}/data`, {
       params: {
         page: currentPage.value,
@@ -505,31 +594,59 @@ const fetchTableData = async () => {
         filters: JSON.stringify(filterInfo.value),
         searchKeywords: JSON.stringify(searchKeywords.value)
       }
-    })
+    });
+    
+    console.log('获取到的响应:', response.data);
     
     if (response.data.success) {
-      tableData.value = response.data.data
-      total.value = response.data.total
+      // 确保数据是数组并添加行索引
+      if (Array.isArray(response.data.data)) {
+        tableData.value = response.data.data.map((item, index) => ({
+          ...item,
+          rowIndex: index + 1 + (currentPage.value - 1) * pageSize.value
+        }));
+      } else {
+        console.warn('服务器返回的数据不是数组:', response.data.data);
+        tableData.value = [];
+      }
       
-      // 如果服务器返回了列信息，使用它
-      if (response.data.columns) {
-        console.log('服务器返回的表列信息:', response.data.columns);
+      total.value = response.data.total || 0;
+      
+      // 处理列信息
+      if (response.data.columns && Array.isArray(response.data.columns)) {
+        console.log('设置列信息:', response.data.columns);
         tableColumns.value = response.data.columns.map(col => ({
           prop: col.field,
-          label: col.header || col.field
+          label: col.header || col.field,
+          key: col.field
         }));
+      } else {
+        console.warn('服务器未返回列信息或列信息格式不正确');
+        tableColumns.value = [];
       }
+
+      console.log('处理后的数据:', {
+        tableData: tableData.value,
+        tableColumns: tableColumns.value,
+        total: total.value
+      });
     } else {
-      message.error(response.data.message || '获取数据失败')
+      console.error('获取数据失败:', response.data.message);
+      message.error(response.data.message || '获取数据失败');
+      tableData.value = [];
+      tableColumns.value = [];
+      total.value = 0;
     }
   } catch (error) {
-    console.error('获取表数据错误:', error)
-    message.error('获取表数据时发生错误')
+    console.error('获取表数据错误:', error);
+    message.error('获取表数据时发生错误: ' + (error.response?.data?.message || error.message));
+    tableData.value = [];
+    tableColumns.value = [];
+    total.value = 0;
   } finally {
-    // 关闭表格加载状态
-    tableLoading.value = false
+    tableLoading.value = false;
   }
-}
+};
 
 // 确认删除表
 const confirmDeleteTable = (tableName) => {
@@ -675,61 +792,142 @@ const fetchData = async () => {
   }
 };
 
-// 上传前验证
-const beforeUpload = (file) => {
-  // 检查文件类型
-  const isExcel = /\.(xlsx|xls)$/.test(file.name.toLowerCase())
-  if (!isExcel) {
-    message.error('只能上传Excel文件!')
-    return false
-  }
-  
-  // 检查目标表是否被锁定
-  if (createDynamicTable.value && tableName.value && tableName.value.trim() !== '') {
-    if (isTableLocked(tableName.value)) {
-      message.error(`表 "${tableName.value}" 已被锁定，无法修改其数据。请先解锁表或使用其他表名。`)
-      return false
-    }
-  }
-  
-  return true
-}
+// 添加上传表单相关状态
+const tableNameModalVisible = ref(false);
+const uploadForm = reactive({
+  tableName: 'demo',
+  createDynamicTable: true
+});
+const selectedFile = ref(null);
+const uploadLoading = ref(false);
 
-// 处理上传状态变化
-const handleUploadChange = (info) => {
-  const { file, fileList: newFileList } = info;
+// 文件上传前处理 - 现在只做验证，不直接上传
+const beforeUploadHandler = (file) => {
+  console.log('开始验证上传文件:', file.name, file.type, file.size);
   
-  // 更新文件列表
-  fileList.value = [...newFileList];
+  // 检查文件类型
+  const isExcel = /\.(xlsx|xls)$/.test(file.name.toLowerCase());
   
-  if (file.status === 'uploading') {
-    // 显示上传中的提示
-    message.loading('正在上传文件，请稍候...', 0);
-  } else if (file.status === 'done') {
-    // 上传成功
-    message.destroy(); // 清除所有消息，包括"上传中"
-    const response = file.response;
+  // 检查MIME类型 (更严格的验证)
+  const validMimeTypes = [
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/octet-stream'  // 某些浏览器可能使用这个通用类型
+  ];
+  
+  if (!isExcel) {
+    message.error('只能上传Excel文件!');
+    return false;
+  }
+  
+  // MIME类型验证
+  if (file.type && !validMimeTypes.includes(file.type)) {
+    console.warn(`文件MIME类型不匹配: ${file.type}，但文件扩展名正确，将继续上传`);
+  }
+  
+  // 检查文件大小 (限制为20MB)
+  const isLessThan20M = file.size / 1024 / 1024 < 20;
+  if (!isLessThan20M) {
+    message.error('文件必须小于20MB!');
+    return false;
+  }
+  
+  // 文件验证通过，保存选中文件并显示表名对话框
+  selectedFile.value = file;
+  
+  // 显示表名确认对话框
+  showTableNameModal();
+  
+  // 返回false，阻止自动上传
+  return false;
+};
+
+// 自定义上传请求
+const customUploadRequest = ({ file, onSuccess, onError }) => {
+  // 这个函数在点击上传按钮选择文件后被调用
+  // 但我们不在这里执行上传，而是通过对话框确认后手动上传
+  // 所以这里不需要实现任何逻辑
+  console.log("Custom request handler invoked but not doing anything here");
+};
+
+// 显示表名确认对话框
+const showTableNameModal = () => {
+  // 预填写表单
+  uploadForm.tableName = tableName.value || 'demo';
+  uploadForm.createDynamicTable = createDynamicTable.value;
+  
+  // 显示对话框
+  tableNameModalVisible.value = true;
+};
+
+// 取消上传
+const cancelUpload = () => {
+  tableNameModalVisible.value = false;
+  selectedFile.value = null;
+  fileList.value = [];
+};
+
+// 确认上传文件
+const confirmUpload = async () => {
+  if (!selectedFile.value) {
+    message.error('未选择文件');
+    return;
+  }
+  
+  if (!uploadForm.tableName) {
+    message.error('请输入表名');
+    return;
+  }
+  
+  // 检查表是否被锁定
+  if (isTableLocked(uploadForm.tableName)) {
+    message.error(`表 "${uploadForm.tableName}" 已被锁定，无法修改其数据。请先解锁表或使用其他表名。`);
+    return;
+  }
+  
+  // 设置上传中状态
+  uploadLoading.value = true;
+  message.loading('正在上传文件，请稍候...', 0);
+  
+  try {
+    // 创建表单数据
+    const formData = new FormData();
+    formData.append('file', selectedFile.value);
+    formData.append('createDynamicTable', uploadForm.createDynamicTable.toString());
+    formData.append('tableName', uploadForm.tableName || 'demo');
+    formData.append('forceRecreate', 'true');
+    formData.append('targetTableLocked', isTableLocked(uploadForm.tableName).toString());
     
-    if (response && response.success) {
-      // 显示成功消息
-      message.success({
-        content: response.message || '上传成功！',
-        duration: 4,
-      });
+    // 执行上传
+    const response = await axios.post('/api/upload', formData);
+    
+    message.destroy(); // 清除所有消息，包括"上传中"
+    
+    if (response.data.success) {
+      // 检查表是否被重建
+      if (response.data.tableRecreated) {
+        message.success(`成功重建表 "${response.data.tableName}" 并导入数据！`);
+      } else {
+        // 显示成功消息
+        message.success({
+          content: response.data.message || '上传成功！',
+          duration: 4,
+        });
+      }
       
-      currentFileName.value = file.name;
+      currentFileName.value = selectedFile.value.name;
       
-      // 清空并设置新的文件列表
+      // 清空并设置新的文件列表，用于显示
       fileList.value = [{
-        uid: file.uid,
-        name: file.name,
+        uid: '1',
+        name: selectedFile.value.name,
         status: 'done'
       }];
       
       // 设置列信息 - 确保使用Excel第一行作为表头
-      if (response.columns) {
-        console.log('服务器返回的列信息:', response.columns);
-        tableColumns.value = response.columns.map(col => ({
+      if (response.data.columns) {
+        console.log('服务器返回的列信息:', response.data.columns);
+        tableColumns.value = response.data.columns.map(col => ({
           prop: col.field,
           label: col.header // 使用header作为标签文本，这就是Excel第一行的内容
         }));
@@ -742,14 +940,14 @@ const handleUploadChange = (info) => {
       refreshTablesWithAnimation();
       
       // 如果创建了表，更新当前表名并查看表数据
-      if (response.tableCreated && response.tableName) {
-        currentTableName.value = response.tableName;
+      if (response.data.tableCreated && response.data.tableName) {
+        currentTableName.value = response.data.tableName;
         currentFileName.value = '';
         
         // 显示表创建成功的特殊消息
         setTimeout(() => {
           message.success({
-            content: `已创建新表: ${response.tableName}`,
+            content: `已创建新表: ${response.data.tableName}`,
             duration: 3
           });
         }, 1000);
@@ -759,6 +957,9 @@ const handleUploadChange = (info) => {
       
       // 重新获取数据
       fetchTableData();
+      
+      // 关闭对话框
+      tableNameModalVisible.value = false;
     } else {
       // 显示错误消息
       message.error({
@@ -768,39 +969,39 @@ const handleUploadChange = (info) => {
       console.error('上传失败:', response);
       fileList.value = [];
     }
-  } else if (file.status === 'error') {
-    // 清除所有消息
-    message.destroy();
+  } catch (error) {
+    message.destroy(); // 清除所有消息
+    
+    console.error('上传错误:', error);
+    
+    let errorMsg = '未知错误，请稍后重试';
+    
+    // 尝试获取更详细的错误信息
+    if (error.response) {
+      if (error.response.data && error.response.data.message) {
+        errorMsg = error.response.data.message;
+      } else if (error.response.status === 400) {
+        errorMsg = '请求格式不正确，请检查参数设置';
+      } else if (error.response.status === 413) {
+        errorMsg = '文件过大，请上传较小的文件';
+      } else if (error.response.status) {
+        errorMsg = `服务器返回错误状态码: ${error.response.status}`;
+      }
+    } else if (error.message) {
+      errorMsg = error.message;
+    }
     
     // 显示详细错误信息
     message.error({
-      content: `上传失败: ${file.error?.message || '未知错误，请稍后重试'}`,
+      content: `上传失败: ${errorMsg}`,
       duration: 5
     });
-    console.error('上传错误:', file.error);
     fileList.value = [];
-  } else if (file.status === 'removed') {
-    fileList.value = [];
-    currentFileName.value = '';
+  } finally {
+    uploadLoading.value = false;
+    selectedFile.value = null;
   }
-}
-
-// 移除文件
-const handleRemove = () => {
-  fileList.value = []
-  currentFileName.value = ''
-}
-
-// 分页操作
-const handleSizeChange = (current, size) => {
-  pageSize.value = size
-  fetchTableData()
-}
-
-const handlePageChange = (page) => {
-  currentPage.value = page
-  fetchTableData()
-}
+};
 
 // 带动画效果刷新表列表
 const refreshTablesWithAnimation = async () => {
@@ -884,15 +1085,25 @@ const clearAllFilters = () => {
 
 // 处理表格变化 (排序、筛选等)
 const handleTableChange = (pagination, filters, sorter) => {
-  console.log('表格变化:', { sorter, filters });
+  console.log('表格变化:', { pagination, sorter, filters });
+  
+  // 判断是否为分页操作
+  const isPaginationChange = 
+    pagination.current !== currentPage.value || 
+    pagination.pageSize !== pageSize.value;
+  
+  // 更新页码和每页数量
+  if (isPaginationChange) {
+    currentPage.value = pagination.current;
+    pageSize.value = pagination.pageSize;
+  }
   
   // 更新排序信息
   if (sorter && sorter.field) {
     sortInfo.value.field = sorter.field;
     sortInfo.value.order = sorter.order;
   } else {
-    sortInfo.value.field = '';
-    sortInfo.value.order = '';
+    sortInfo.value = { field: '', order: '' };
   }
   
   // 更新筛选信息
@@ -916,26 +1127,37 @@ const handleTableChange = (pagination, filters, sorter) => {
     });
   }
   
-  // 重置到第一页
-  currentPage.value = 1;
+  // 仅当是排序或筛选变化时才重置到第一页
+  if ((sorter && sorter.column) || Object.keys(filters).some(key => filters[key]?.length > 0)) {
+    currentPage.value = 1;
+  }
   
   // 设置表格加载状态
   tableLoading.value = true;
   
   // 显示筛选应用中的提示
-  const filterApplyMsg = message.loading('正在对所有数据应用筛选条件...', 0);
+  let filterApplyMsg;
+  if (Object.keys(filterInfo.value).length > 0 || Object.keys(searchKeywords.value).length > 0) {
+    filterApplyMsg = message.loading('正在对所有数据应用筛选条件...', 0);
+  }
   
-  console.log('发送筛选请求到后端，筛选条件:', {
+  console.log('发送请求到后端，参数:', {
+    page: currentPage.value,
+    pageSize: pageSize.value,
+    sortField: sortInfo.value.field,
+    sortOrder: sortInfo.value.order,
     filters: filterInfo.value,
     searchKeywords: searchKeywords.value
   });
   
   // 重新获取数据
   fetchTableData().finally(() => {
-    filterApplyMsg();
-    
-    if (Object.keys(filterInfo.value).length > 0 || Object.keys(searchKeywords.value).length > 0) {
-      message.success('已对全部数据应用筛选条件');
+    if (filterApplyMsg) {
+      filterApplyMsg();
+      
+      if (Object.keys(filterInfo.value).length > 0 || Object.keys(searchKeywords.value).length > 0) {
+        message.success('已对全部数据应用筛选条件');
+      }
     }
   });
 }
@@ -969,46 +1191,35 @@ const handleGlobalSearch = (value) => {
   })
 }
 
-// 添加编辑相关的方法
+// 处理修改按钮点击
 const handleEdit = (record) => {
-  // 深拷贝记录，避免直接修改原数据
-  editingRecord.value = JSON.parse(JSON.stringify(record))
-  // 使用实际的列名创建编辑表单数据
-  editForm.value = {}
+  editingRecord.value = { ...record };
+  editForm.value = {};
+  // 复制需要编辑的字段
   tableColumns.value.forEach(col => {
-    if (col.prop !== 'id' && col.prop !== 'created_at' && col.prop !== 'updated_at') {
-      editForm.value[col.prop] = record[col.prop]
+    if (col.prop !== 'id') {
+      editForm.value[col.prop] = record[col.prop];
     }
-  })
-  editModalVisible.value = true
-}
+  });
+  editModalVisible.value = true;
+};
 
+// 处理取消修改
 const handleEditCancel = () => {
-  editModalVisible.value = false
-  editingRecord.value = null
-  editForm.value = {}
-}
+  editModalVisible.value = false;
+  editingRecord.value = null;
+  editForm.value = {};
+};
 
+// 处理确认修改
 const handleEditOk = async () => {
   if (!currentTableName.value || !editingRecord.value?.id) {
-    message.error('缺少必要的修改信息')
-    return
+    message.error('缺少必要的修改信息');
+    return;
   }
 
-  const hide = message.loading('正在保存修改...', 0)
-  tableLoading.value = true
-
+  tableLoading.value = true;
   try {
-    // 构建要更新的数据对象，使用实际的列名
-    const updateData = {}
-    tableColumns.value.forEach(col => {
-      if (col.prop !== 'id' && col.prop !== 'created_at' && col.prop !== 'updated_at') {
-        updateData[col.prop] = editForm.value[col.prop]
-      }
-    })
-
-    console.log('提交修改数据:', updateData)
-
     const response = await fetch(
       `/api/tables/${currentTableName.value}/data/${editingRecord.value.id}`,
       {
@@ -1016,39 +1227,215 @@ const handleEditOk = async () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ data: updateData })
+        body: JSON.stringify({ data: editForm.value })
       }
-    )
+    );
 
-    const result = await response.json()
-
-    if (!response.ok) {
-      throw new Error(result.message || '修改失败')
-    }
-
+    const result = await response.json();
     if (result.success) {
-      // 先关闭弹窗和清理表单
-      editModalVisible.value = false
-      editingRecord.value = null
-      editForm.value = {}
-      
-      // 显示成功消息
-      message.success('修改成功')
-      
-      // 重新获取数据
-      await fetchTableData()
+      message.success('修改成功');
+      editModalVisible.value = false;
+      editingRecord.value = null;
+      editForm.value = {};
+      // 重新加载数据
+      await fetchTableData();
     } else {
-      throw new Error(result.message || '修改失败')
+      throw new Error(result.message || '修改失败');
     }
   } catch (error) {
-    console.error('修改数据错误:', error)
-    message.error('修改数据时发生错误: ' + error.message)
+    console.error('修改数据错误:', error);
+    message.error('修改数据时发生错误: ' + error.message);
   } finally {
-    // 确保loading状态被关闭
-    tableLoading.value = false
-    hide()
+    tableLoading.value = false;
   }
-}
+};
+
+// SQL查询相关
+const sqlQuery = ref('select * from demo');
+const sqlTableData = ref([]);
+const sqlTableColumns = ref([]);
+const sqlLoading = ref(false);
+const sqlTotal = ref(0);
+const sqlPagination = reactive({
+  current: 1,
+  pageSize: 10
+});
+
+// SQL分页处理
+const handleSqlPageChange = async (page, pageSize) => {
+  sqlPagination.current = page;
+  sqlPagination.pageSize = pageSize;
+  await executeSql(true);
+};
+
+const handleSqlSizeChange = async (current, size) => {
+  sqlPagination.current = 1;
+  sqlPagination.pageSize = size;
+  await executeSql(true);
+};
+
+// 执行SQL查询
+const executeSql = async (isPageChange = false) => {
+  if (!sqlQuery.value.trim() && !isPageChange) {
+    message.warning('请输入SQL查询语句');
+    return;
+  }
+
+  sqlLoading.value = true;
+  try {
+    const response = await axios.post('/api/sql/execute', {
+      sql: sqlQuery.value,
+      pageSize: sqlPagination.pageSize,
+      page: sqlPagination.current
+    });
+
+    if (response.data.success) {
+      // 确保数据是数组
+      const data = Array.isArray(response.data.data) ? response.data.data : [];
+      
+      // 处理返回的数据，添加key属性和行索引
+      sqlTableData.value = data.map((item, index) => ({
+        ...item,
+        key: index,
+        rowIndex: index + 1 + (sqlPagination.current - 1) * sqlPagination.pageSize
+      }));
+
+      // 设置总记录数
+      sqlTotal.value = response.data.total || 0;
+
+      // 使用服务器返回的列信息
+      if (response.data.columns && Array.isArray(response.data.columns)) {
+        sqlTableColumns.value = response.data.columns;
+      } else if (sqlTableData.value.length > 0) {
+        // 如果服务器没有返回列信息，从第一条记录中提取
+        sqlTableColumns.value = Object.keys(sqlTableData.value[0])
+          .filter(key => !['key', 'rowIndex'].includes(key))
+          .map(key => ({
+            field: key,
+            header: key
+          }));
+      } else {
+        sqlTableColumns.value = [];
+      }
+
+      if (!isPageChange) {
+        message.success('查询执行成功');
+      }
+    } else {
+      message.error(response.data.message || '查询执行失败');
+      sqlTableData.value = [];
+      sqlTableColumns.value = [];
+      sqlTotal.value = 0;
+    }
+  } catch (error) {
+    console.error('SQL查询出错:', error);
+    message.error(error.response?.data?.message || '查询执行失败');
+    sqlTableData.value = [];
+    sqlTableColumns.value = [];
+    sqlTotal.value = 0;
+  } finally {
+    sqlLoading.value = false;
+  }
+};
+
+// 清空SQL查询
+const clearSql = () => {
+  sqlQuery.value = '';
+  sqlTableData.value = [];
+  sqlTableColumns.value = [];
+  sqlTotal.value = 0;
+  sqlPagination.current = 1;
+};
+
+// SQL表格列配置
+const sqlAntTableColumns = computed(() => {
+  return sqlTableColumns.value.map(col => {
+    return {
+      title: col.header || col.field,
+      dataIndex: col.field,
+      key: col.field,
+      align: 'center',
+      minWidth: 120,
+    }
+  });
+});
+
+// 测试上传参数
+const testUploadParams = async () => {
+  try {
+    // 构建与上传相同的参数
+    const testParams = {
+      createDynamicTable: createDynamicTable.value,
+      tableName: tableName.value || 'demo',
+      forceRecreate: true,
+      targetTableLocked: isTableLocked(tableName.value)
+    };
+    
+    console.log('测试上传参数:', testParams);
+    
+    // 向后端发送测试请求
+    const response = await axios.post('/api/upload/test-params', testParams, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
+    
+    if (response.data.success) {
+      console.log('参数测试成功，后端解析结果:', response.data);
+      message.success('参数验证成功，配置正确');
+    } else {
+      console.error('参数测试失败:', response.data.message);
+      message.error('参数验证失败: ' + response.data.message);
+    }
+  } catch (error) {
+    console.error('测试上传参数时出错:', error);
+    message.error('测试参数时发生错误: ' + (error.response?.data?.message || error.message));
+  }
+};
+
+// 添加测试强制重建表的函数
+const testForceRecreate = async () => {
+  if (!tableName.value) {
+    message.warning('请输入表名');
+    return;
+  }
+  
+  if (isTableLocked(tableName.value)) {
+    message.error(`表 "${tableName.value}" 已被锁定，无法修改`);
+    return;
+  }
+  
+  try {
+    const hide = message.loading(`正在测试强制重建表 "${tableName.value}"...`, 0);
+    
+    const response = await axios.post('/api/tables/recreate', {
+      tableName: tableName.value,
+      forceRecreate: true
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
+    
+    hide();
+    
+    if (response.data.success) {
+      message.success(`表 "${tableName.value}" 重建测试成功: ${response.data.message}`);
+      console.log('重建表响应:', response.data);
+      
+      // 刷新表列表
+      await refreshTablesWithAnimation();
+    } else {
+      message.error(`表重建失败: ${response.data.message}`);
+      console.error('重建表失败:', response.data);
+    }
+  } catch (error) {
+    message.error(`测试重建表时出错: ${error.response?.data?.message || error.message}`);
+    console.error('测试重建表错误:', error);
+  }
+};
 
 onMounted(() => {
   fetchDynamicTables()
@@ -1076,25 +1463,46 @@ onMounted(() => {
 
 .upload-content {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 20px;
+  align-items: flex-start;
 }
 
-/* 大屏幕上使用两列布局 - 上传与表格列表并排 */
-@media (min-width: 992px) {
+/* 设置两个区域的宽度比例为1:1 */
+.upload-section {
+  width: 50%;
+  flex-shrink: 0;
+}
+
+.tables-section {
+  width: 50%;
+  flex-shrink: 0;
+}
+
+/* 小屏幕下切换为垂直布局 */
+@media (max-width: 992px) {
   .upload-content {
-    flex-direction: row;
-    align-items: flex-start;
+    flex-direction: column;
   }
   
-  .upload-section {
-    width: 40%;
-  }
-  
+  .upload-section,
   .tables-section {
-    width: 60%;
-    padding-left: 20px;
+    width: 100%;
   }
+}
+
+.sql-card {
+  margin-bottom: 16px;
+  transition: all 0.3s;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08), 
+              0 3px 6px 0 rgba(0, 0, 0, 0.06), 
+              0 5px 12px 4px rgba(0, 0, 0, 0.04);
+}
+
+.sql-card:hover {
+  transform: translateY(-3px);
 }
 
 .upload-all-card, .data-card {
@@ -1102,9 +1510,9 @@ onMounted(() => {
   transition: all 0.3s;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.16), 
-              0 3px 6px 0 rgba(0, 0, 0, 0.12), 
-              0 5px 12px 4px rgba(0, 0, 0, 0.09);
+  box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08), 
+              0 3px 6px 0 rgba(0, 0, 0, 0.06), 
+              0 5px 12px 4px rgba(0, 0, 0, 0.04);
 }
 
 .upload-all-card:hover, .data-card:hover {
@@ -1126,13 +1534,49 @@ onMounted(() => {
   gap: 16px;
 }
 
-.search-box {
-  margin-right: 16px;
+.search-area {
+  margin: 20px 0 24px;
+  padding: 24px;
+  background: #f9fafb;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
+}
+
+.search-area:hover {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+  border-color: #d1d5db;
 }
 
 .search-container {
   display: flex;
   align-items: center;
+  justify-content: center;
+}
+
+.search-container :deep(.ant-select-selector) {
+  height: 46px !important;
+  display: flex;
+  align-items: center;
+  border-radius: 8px !important;
+}
+
+.search-container :deep(.ant-input-search) {
+  border-radius: 8px !important;
+}
+
+.search-container :deep(.ant-input) {
+  height: 46px !important;
+  font-size: 16px;
+  padding-left: 16px;
+}
+
+.search-container :deep(.ant-input-search-button) {
+  height: 46px !important;
+  width: 80px;
+  border-radius: 0 8px 8px 0 !important;
+  font-size: 16px;
 }
 
 .card-header .anticon, .section-header .anticon {
@@ -1157,36 +1601,40 @@ onMounted(() => {
   gap: 8px;
 }
 
-.dynamic-table-options {
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #f0f7ff;
-  border-radius: 6px;
-  border-left: 3px solid #1890ff;
-}
-
-.option-label {
-  font-weight: 500;
-  color: rgba(0, 0, 0, 0.85);
-}
-
-.option-checkbox {
-  margin-bottom: 10px;
-}
-
-.table-options {
-  margin-top: 15px;
-  padding-left: 25px;
-  border-top: 1px dashed #d9d9d9;
-  padding-top: 15px;
-}
-
-.table-name-input {
-  margin-bottom: 15px;
-}
-
 .upload-excel {
   width: 100%;
+  margin-top: 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08), 
+              0 3px 6px 0 rgba(0, 0, 0, 0.06), 
+              0 5px 12px 4px rgba(0, 0, 0, 0.04);
+  transition: all 0.3s;
+}
+
+.upload-excel:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 3px 6px -4px rgba(0, 0, 0, 0.12), 
+              0 6px 16px 0 rgba(0, 0, 0, 0.08), 
+              0 9px 28px 8px rgba(0, 0, 0, 0.05);
+}
+
+.upload-excel :deep(.ant-upload-drag) {
+  border-radius: 8px;
+  border: 1px dashed #d9d9d9;
+  background: #fafafa;
+  transition: all 0.3s;
+}
+
+.upload-excel :deep(.ant-upload-drag:hover) {
+  border-color: #1890ff;
+  background: #f0f7ff;
+}
+
+.upload-excel :deep(.ant-upload-drag-icon) {
+  color: #1890ff;
+  font-size: 48px;
+  margin-bottom: 16px;
 }
 
 .tables-list {
@@ -1226,13 +1674,6 @@ onMounted(() => {
   color: rgba(0, 0, 0, 0.45);
 }
 
-.pagination-container {
-  margin-top: 20px;
-  display: flex;
-  justify-content: center;
-  padding: 10px 0;
-}
-
 .filter-info {
   margin-bottom: 16px;
 }
@@ -1243,7 +1684,112 @@ onMounted(() => {
 
 .back-to-top-btn {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  bottom: 30px;
+  right: 30px;
+  z-index: 1000;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.sql-buttons {
+  margin-top: 16px;
+}
+
+.sql-table {
+  margin-top: 16px;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08), 
+              0 3px 6px 0 rgba(0, 0, 0, 0.06), 
+              0 5px 12px 4px rgba(0, 0, 0, 0.04);
+}
+
+.sql-table :deep(.ant-table) {
+  border-radius: 8px;
+}
+
+.sql-table :deep(.ant-table-thead > tr > th) {
+  background: #f7f9fc;
+  color: #1f2937;
+  font-weight: 600;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.sql-table :deep(.ant-table-tbody > tr > td) {
+  padding: 12px 16px;
+  color: #374151;
+}
+
+.sql-table :deep(.table-striped) {
+  background-color: #f9fafb;
+}
+
+.sql-table :deep(.ant-table-tbody > tr:hover > td) {
+  background: #f0f7ff !important;
+}
+
+.sql-table :deep(.ellipsis-cell) {
+  display: inline-block;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sql-table :deep(.ant-pagination),
+.data-card :deep(.ant-pagination),
+.tables-section :deep(.ant-pagination) {
+  margin: 16px 0;
+  padding: 0 16px;
+}
+
+.sql-table :deep(.ant-table-empty .ant-table-tbody > tr:hover > td),
+.data-card :deep(.ant-table-empty .ant-table-tbody > tr:hover > td),
+.tables-section :deep(.ant-table-empty .ant-table-tbody > tr:hover > td) {
+  background: none !important;
+}
+
+/* 禁用表格内部滚动条 */
+:deep(.ant-table-body) {
+  overflow-y: visible !important;
+}
+
+:deep(.ant-table-body-inner) {
+  overflow-y: visible !important;
+}
+
+:deep(.ant-table-header) {
+  overflow-y: visible !important;
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+:deep(.ant-table-header::-webkit-scrollbar),
+:deep(.ant-table-body::-webkit-scrollbar),
+:deep(.ant-table-body-inner::-webkit-scrollbar) {
+  display: none !important;
+}
+
+.empty-tables {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 1px 2px -2px rgba(0, 0, 0, 0.08), 
+              0 3px 6px 0 rgba(0, 0, 0, 0.06), 
+              0 5px 12px 4px rgba(0, 0, 0, 0.04);
+}
+
+.option-hint {
+  font-size: 12px;
+  color: #ff4d4f;
+  margin-top: 8px;
+  padding-left: 25px;
+  line-height: 1.5;
+}
+
+.table-name-warning, .table-name-info {
+  margin-top: 8px;
+  margin-bottom: 16px;
 }
 </style> 

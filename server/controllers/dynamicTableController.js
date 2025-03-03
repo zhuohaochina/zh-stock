@@ -1,5 +1,5 @@
 const sequelize = require('../config/database');
-const { getDynamicTables, getTableColumns } = require('../utils/tableBuilder');
+const { getDynamicTables, getTableColumns, createTableFromExcel } = require('../utils/tableBuilder');
 
 /**
  * 获取所有动态创建的表
@@ -236,68 +236,55 @@ const deleteTable = async (req, res) => {
   }
 };
 
-// 修改表数据
-const updateTableData = async (req, res) => {
+/**
+ * 更新表中的数据
+ */
+async function updateTableData(req, res) {
   const { tableName, id } = req.params;
-  const { data } = req.body;
+  // 处理嵌套的数据结构：req.body可能是{data: {...}}或直接是{...}
+  const updateData = req.body.data || req.body;
 
-  console.log('收到更新请求:', { tableName, id, data });
+  console.log('收到更新请求:', {
+    tableName,
+    id,
+    updateData
+  });
+
+  if (!tableName || !id || !updateData) {
+    return res.status(400).json({
+      success: false,
+      message: '缺少必要的参数'
+    });
+  }
 
   try {
-    // 检查表是否存在
-    const [tables] = await sequelize.query(
-      'SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1',
-      {
-        bind: [tableName],
-        type: sequelize.QueryTypes.SELECT
-      }
-    );
-
-    if (!tables || tables.length === 0) {
-      console.log(`表 ${tableName} 不存在`);
-      return res.status(404).json({
-        success: false,
-        message: `表 ${tableName} 不存在`
-      });
+    // 构建更新字段
+    const updatePairs = [];
+    for (const [key, value] of Object.entries(updateData)) {
+      // 对值进行转义，防止SQL注入
+      const safeValue = typeof value === 'string' ? value.replace(/'/g, "''") : value;
+      updatePairs.push(`"${key}" = '${safeValue}'`);
     }
+    
+    // 构建SQL语句
+    const query = `
+      UPDATE "${tableName}"
+      SET ${updatePairs.join(', ')}
+      WHERE id = ${id}
+    `;
 
-    // 构建更新语句
-    const updateFields = Object.entries(data)
-      .filter(([key]) => key !== 'id' && key !== 'created_at' && key !== 'updated_at')
-      .map(([key]) => `"${key}" = :${key}`)
-      .join(', ');
+    console.log('执行SQL语句:', query);
 
-    const updateValues = {
-      ...data,
-      id: id
-    };
+    // 执行更新
+    await sequelize.query(query, {
+      type: sequelize.QueryTypes.UPDATE
+    });
 
-    console.log('构建的SQL:', `UPDATE "${tableName}" SET ${updateFields} WHERE id = :id`);
-    console.log('参数值:', updateValues);
-
-    // 执行更新操作
-    const [result] = await sequelize.query(
-      `UPDATE "${tableName}" SET ${updateFields} WHERE id = :id RETURNING *`,
-      {
-        replacements: updateValues,
-        type: sequelize.QueryTypes.UPDATE
-      }
-    );
-
-    console.log('更新结果:', result);
-
-    if (!result || result.length === 0) {
-      console.log('未找到要修改的数据');
-      return res.status(404).json({
-        success: false,
-        message: '未找到要修改的数据'
-      });
-    }
+    console.log('更新成功');
 
     res.json({
       success: true,
-      message: '数据修改成功',
-      data: result[0]
+      message: '数据更新成功'
     });
   } catch (error) {
     console.error('修改数据错误:', error);
@@ -307,6 +294,68 @@ const updateTableData = async (req, res) => {
       error: error.message
     });
   }
+}
+
+/**
+ * 重建指定表
+ */
+const recreateTable = async (req, res) => {
+  try {
+    const { tableName, forceRecreate } = req.body;
+    
+    if (!tableName) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少表名参数'
+      });
+    }
+    
+    // 检查表是否存在
+    const tables = await getDynamicTables();
+    const tableExists = tables.includes(tableName);
+    
+    if (!tableExists) {
+      return res.status(404).json({
+        success: false,
+        message: `表 "${tableName}" 不存在，无法重建`
+      });
+    }
+    
+    if (forceRecreate !== true) {
+      return res.status(400).json({
+        success: false,
+        message: `必须设置 forceRecreate 为 true 才能重建表`
+      });
+    }
+
+    // 获取表的列信息
+    const columns = await getTableColumns(tableName);
+    
+    // 按照createTableFromExcel函数的要求，转换列格式
+    const formattedColumns = columns.map(col => ({
+      header: col.header || col.field,
+      field: col.field
+    }));
+    
+    // 强制重建表
+    const newModel = await createTableFromExcel(tableName, formattedColumns, true);
+    
+    if (!newModel) {
+      throw new Error(`表 "${tableName}" 重建失败`);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `表 "${tableName}" 已成功重建`,
+      tableName: tableName
+    });
+  } catch (error) {
+    console.error('重建表时出错:', error);
+    res.status(500).json({
+      success: false,
+      message: `重建表失败: ${error.message}`
+    });
+  }
 };
 
 module.exports = {
@@ -314,5 +363,6 @@ module.exports = {
   getTableStructure,
   getTableData,
   deleteTable,
-  updateTableData
+  updateTableData,
+  recreateTable
 }; 

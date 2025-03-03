@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { parseExcel } = require('../utils/excelParser');
 const { ExcelData } = require('../models');
 const { Op } = require('sequelize');
-const { createTableFromExcel, insertDataToTable } = require('../utils/tableBuilder');
+const { createTableFromExcel, insertDataToTable, getDynamicTables } = require('../utils/tableBuilder');
 
 // 配置上传目录和文件命名
 const storage = multer.diskStorage({
@@ -86,6 +86,14 @@ const handleUpload = (req, res) => {
     }
 
     try {
+      // 记录请求参数，方便调试
+      console.log('上传请求参数:', {
+        body: req.body,
+        file: req.file.originalname,
+        size: req.file.size,
+        mimetype: req.file.mimetype
+      });
+      
       // 解析Excel文件
       const filePath = req.file.path;
       console.log(`开始解析文件: ${filePath}, 原始名称: ${req.file.originalname}`);
@@ -115,24 +123,45 @@ const handleUpload = (req, res) => {
       }
       
       // 获取是否要动态创建表及表名
-      const createDynamicTable = req.body.createDynamicTable === 'true';
+      // 正确处理布尔值或字符串类型的参数
+      const createDynamicTable = req.body.createDynamicTable === true || req.body.createDynamicTable === 'true';
       let tableName = req.body.tableName || 'demo';
-      const forceRecreate = req.body.forceRecreate === 'true';
+      const forceRecreate = req.body.forceRecreate === true || req.body.forceRecreate === 'true';
+      
+      // 记录参数处理结果
+      console.log('处理后的参数:', {
+        createDynamicTable,
+        tableName,
+        forceRecreate,
+        targetTableLocked: req.body.targetTableLocked
+      });
       
       let tableCreated = false;
       let dynamicTable = null;
+      let tableRecreated = false;
       
       // 如果需要动态创建表
       if (createDynamicTable) {
         try {
+          console.log(`准备创建/更新表: ${tableName}, forceRecreate: ${forceRecreate}`);
+          
+          // 检查表是否已存在
+          const tables = await getDynamicTables();
+          const tableExists = tables.includes(tableName);
+          
+          if (tableExists) {
+            console.log(`表 "${tableName}" 已存在，forceRecreate: ${forceRecreate}`);
+            tableRecreated = true;
+          }
+          
           // 创建表
           dynamicTable = await createTableFromExcel(tableName, columns, forceRecreate);
           tableCreated = true;
           
           // 向表中插入数据
-          await insertDataToTable(dynamicTable, data, columns);
+          const insertedCount = await insertDataToTable(dynamicTable, data, columns);
           
-          console.log(`成功将数据插入到表 "${tableName}"`);
+          console.log(`成功将 ${insertedCount} 条数据插入到表 "${tableName}"`);
         } catch (tableError) {
           console.error('动态创建表失败:', tableError);
           // 失败时回退到原始存储方式
@@ -168,7 +197,9 @@ const handleUpload = (req, res) => {
       res.status(200).json({
         success: true,
         message: tableCreated 
-          ? `文件上传成功并创建了表 "${tableName}"` 
+          ? tableRecreated 
+            ? `文件上传成功并重建了表 "${tableName}"` 
+            : `文件上传成功并创建了表 "${tableName}"`
           : '文件上传并处理成功',
         file: {
           name: req.file.originalname,
@@ -177,6 +208,7 @@ const handleUpload = (req, res) => {
         columns,
         recordCount: data.length,
         tableCreated,
+        tableRecreated,
         tableName: tableCreated ? tableName : null
       });
       
@@ -190,6 +222,47 @@ const handleUpload = (req, res) => {
     }
   });
 };
+
+async function processExcelFile(filePath, originalName) {
+    try {
+        // ... existing code ...
+
+        // 创建动态表
+        console.log('准备创建表，表头:', headers);
+        const dynamicModel = await createTableFromExcel(sheetName, headers);
+        
+        if (!dynamicModel) {
+            throw new Error('表创建失败，未返回模型实例');
+        }
+
+        // 尝试插入数据
+        console.log(`开始向表 ${dynamicModel.tableName} 插入数据`);
+        const insertResult = await dynamicModel.bulkCreate(
+            rows.map(row => {
+                const record = {};
+                headers.forEach((header, index) => {
+                    record[header] = row[index];
+                });
+                return record;
+            })
+        );
+        
+        console.log(`成功插入 ${insertResult.length} 条记录到表 ${dynamicModel.tableName}`);
+        
+        // 验证数据是否插入成功
+        const count = await dynamicModel.count();
+        console.log(`表 ${dynamicModel.tableName} 中的记录数: ${count}`);
+
+        return {
+            success: true,
+            message: `文件 ${originalName} 成功处理，保存了 ${insertResult.length} 条记录`,
+            tableName: dynamicModel.tableName
+        };
+    } catch (error) {
+        console.error('处理Excel文件时出错:', error);
+        throw error;
+    }
+}
 
 module.exports = {
   handleUpload

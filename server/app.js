@@ -2,8 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
-const uploadController = require('./controllers/uploadController');
-const dynamicTableRoutes = require('./routes/dynamicTableRoutes');
+const routes = require('./routes');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
@@ -17,8 +16,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // 路由
-app.post('/api/upload', uploadController.handleUpload);
-app.use('/api/tables', dynamicTableRoutes);
+app.use('/api', routes);
 
 // 错误处理中间件
 app.use((err, req, res, next) => {

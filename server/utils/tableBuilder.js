@@ -8,75 +8,59 @@ const sequelize = require('../config/database');
  * @param {boolean} forceRecreate - 如果表已存在是否强制重建
  */
 async function createTableFromExcel(tableName, columns, forceRecreate = false) {
+  const sanitizedTableName = sanitizeTableName(tableName);
+  console.log(`开始创建表: ${sanitizedTableName}`);
+  
   try {
-    // 检查表名是否合法（只允许字母、数字和下划线）
-    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(tableName)) {
-      throw new Error(`表名 "${tableName}" 无效，只允许字母、数字和下划线且必须以字母开头`);
-    }
-    
-    // 估计数据类型
-    const columnDefinitions = {};
-    
-    // 添加ID主键
-    columnDefinitions.id = {
+    // 先检查表是否存在
+    const tableExists = await sequelize.query(
+      `SELECT to_regclass('public.${sanitizedTableName}');`
+    );
+    console.log('表检查结果:', tableExists);
+
+    // 构建表结构
+    const modelDefinition = {};
+    columns.forEach(column => {
+      modelDefinition[column.header] = {
+        type: DataTypes.TEXT,
+        allowNull: true
+      };
+    });
+
+    // 添加 id 字段作为主键
+    modelDefinition.id = {
       type: DataTypes.INTEGER,
       primaryKey: true,
       autoIncrement: true
     };
-    
-    // 保存列名和表头的映射关系
-    const columnHeaders = {};
-    
-    // 处理每一列
-    columns.forEach(column => {
-      // 确保列名合法（只允许字母、数字和下划线）
-      let fieldName = column.field.replace(/[^a-zA-Z0-9_]/g, '_');
-      if (!/^[a-zA-Z_]/.test(fieldName)) {
-        fieldName = `col_${fieldName}`;
-      }
+
+    // 使用事务创建表
+    const transaction = await sequelize.transaction();
+    try {
+      const model = sequelize.define(sanitizedTableName, modelDefinition, {
+        tableName: sanitizedTableName,
+        timestamps: false,
+        underscored: true
+      });
+
+      await model.sync({ force: true, transaction });
+      await transaction.commit();
+      console.log(`表 ${sanitizedTableName} 创建成功`);
       
-      // 保存原始表头
-      columnHeaders[fieldName] = column.header || fieldName;
+      // 验证表是否真的创建成功
+      const tables = await sequelize.query(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';"
+      );
+      console.log('当前数据库中的所有表:', tables[0]);
       
-      // 默认为TEXT类型，这样可以存储任何值
-      columnDefinitions[fieldName] = {
-        type: DataTypes.TEXT,
-        allowNull: true,
-        comment: column.header || fieldName // 将表头存储为列注释
-      };
-    });
-    
-    // 添加创建和更新时间戳
-    columnDefinitions.createdAt = {
-      type: DataTypes.DATE,
-      defaultValue: sequelize.literal('CURRENT_TIMESTAMP')
-    };
-    
-    columnDefinitions.updatedAt = {
-      type: DataTypes.DATE,
-      defaultValue: sequelize.literal('CURRENT_TIMESTAMP')
-    };
-    
-    // 定义模型
-    const DynamicModel = sequelize.define(tableName, columnDefinitions, {
-      tableName: tableName,
-      timestamps: true,
-      freezeTableName: true, // 不自动复数化表名
-      // 保存列头信息为模型的元数据
-      columnHeaders: columnHeaders
-    });
-    
-    // 同步到数据库（如果表已存在，forceRecreate控制是否重建）
-    await DynamicModel.sync({ force: forceRecreate });
-    
-    // 存储列表头映射关系到数据库中的元数据表
-    await storeColumnHeaders(tableName, columnHeaders);
-    
-    console.log(`表 "${tableName}" 已${forceRecreate ? '重建' : '创建'}`);
-    return DynamicModel;
+      return model;
+    } catch (error) {
+      await transaction.rollback();
+      throw new Error(`创建表 ${sanitizedTableName} 失败: ${error.message}`);
+    }
   } catch (error) {
-    console.error('创建表时出错:', error);
-    throw new Error(`创建表 "${tableName}" 失败: ${error.message}`);
+    console.error('创建表时发生错误:', error);
+    throw error;
   }
 }
 
@@ -122,6 +106,7 @@ async function storeColumnHeaders(tableName, columnHeaders) {
  * @param {Object} model - Sequelize模型
  * @param {Array} data - Excel数据
  * @param {Array} columns - Excel列信息
+ * @returns {number} 插入的记录数量
  */
 async function insertDataToTable(model, data, columns) {
   try {
@@ -131,11 +116,8 @@ async function insertDataToTable(model, data, columns) {
       
       // 处理每个字段
       columns.forEach(column => {
-        let fieldName = column.field.replace(/[^a-zA-Z0-9_]/g, '_');
-        if (!/^[a-zA-Z_]/.test(fieldName)) {
-          fieldName = `col_${fieldName}`;
-        }
-        
+        // 使用原始表头作为字段名
+        const fieldName = column.header.trim() || `column${column.field.replace(/[^0-9]/g, '')}`;
         record[fieldName] = item.rowData[column.field] || null;
       });
       
@@ -143,15 +125,21 @@ async function insertDataToTable(model, data, columns) {
     });
     
     // 批量插入数据
+    let insertedCount = 0;
     if (records.length > 0) {
       const batchSize = 100;
       for (let i = 0; i < records.length; i += batchSize) {
         const batch = records.slice(i, i + batchSize);
-        await model.bulkCreate(batch);
+        const result = await model.bulkCreate(batch);
+        insertedCount += result.length;
       }
     }
     
-    return records.length;
+    // 验证数据是否全部插入
+    const totalCount = await model.count();
+    console.log(`表 ${model.tableName} 中的总记录数: ${totalCount}`);
+    
+    return insertedCount;
   } catch (error) {
     console.error('插入数据时出错:', error);
     throw new Error(`向表插入数据失败: ${error.message}`);
@@ -210,7 +198,7 @@ async function getTableColumns(tableName) {
     
     // 映射列信息，添加原始表头
     return columnsResults
-      .filter(col => !['id', 'createdAt', 'updatedAt'].includes(col.column_name))
+      .filter(col => !['id'].includes(col.column_name)) // 只过滤id字段
       .map(col => ({
         field: col.column_name,
         header: columnHeaders[col.column_name] || col.column_name, // 使用原始表头或默认值
@@ -221,6 +209,29 @@ async function getTableColumns(tableName) {
     console.error('获取表列信息时出错:', error);
     throw new Error(`获取表 "${tableName}" 的列信息失败: ${error.message}`);
   }
+}
+
+function sanitizeTableName(tableName) {
+  // 确保生成一个有效的表名
+  if (!tableName || typeof tableName !== 'string') {
+    // 如果表名不是有效字符串，提供默认值
+    return 'default_table';
+  }
+  
+  // 移除非法字符，只保留字母、数字和下划线
+  let sanitized = tableName.replace(/[^a-zA-Z0-9_]/g, '_');
+  
+  // 确保表名以字母开头
+  if (!/^[a-zA-Z]/.test(sanitized)) {
+    sanitized = 't_' + sanitized;
+  }
+  
+  // 截断长度，防止表名过长
+  if (sanitized.length > 63) { // PostgreSQL限制表名长度为63字符
+    sanitized = sanitized.substring(0, 63);
+  }
+  
+  return sanitized.toLowerCase();
 }
 
 module.exports = {
