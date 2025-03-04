@@ -13,34 +13,48 @@ async function createTable() {
     await client.connect();
     console.log('已连接到数据库');
     
-    // 创建excel_data表
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS excel_data (
-        id SERIAL PRIMARY KEY,
-        "fileName" VARCHAR(255) NOT NULL,
-        "originalName" VARCHAR(255) NOT NULL,
-        data JSONB NOT NULL,
-        "rowIndex" INTEGER NOT NULL,
-        "sheetName" VARCHAR(255),
-        "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-        "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    // 先检查表是否存在，若不存在则创建
+    const tableExists = await client.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'excel_data'
       );
     `);
     
-    // 创建索引
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS excel_data_file_name_idx ON excel_data("fileName");
-    `);
+    if (!tableExists.rows[0].exists) {
+      console.log('表excel_data不存在，开始创建...');
+      
+      // 创建excel_data表
+      await client.query(`
+        CREATE TABLE excel_data (
+          id SERIAL PRIMARY KEY,
+          filename VARCHAR(255) NOT NULL,
+          originalname VARCHAR(255) NOT NULL,
+          data JSONB NOT NULL,
+          rowindex INTEGER NOT NULL,
+          sheetname VARCHAR(255),
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        );
+      `);
+      console.log('表excel_data创建成功');
+      
+      // 创建索引
+      console.log('开始创建索引...');
+      await client.query(`CREATE INDEX excel_data_filename_idx ON excel_data(filename);`);
+      console.log('filename索引创建成功');
+      
+      await client.query(`CREATE INDEX excel_data_sheetname_idx ON excel_data(sheetname);`);
+      console.log('sheetname索引创建成功');
+    } else {
+      console.log('表excel_data已存在，跳过创建');
+    }
     
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS excel_data_sheet_name_idx ON excel_data("sheetName");
-    `);
-    
-    console.log('成功创建excel_data表和索引');
-    
+    console.log('数据库设置完成');
     await client.end();
   } catch (err) {
-    console.error('创建表时出错:', err.message);
+    console.error('创建表时出错:', err);
+    await client.end();
   }
 }
 

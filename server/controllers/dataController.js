@@ -35,8 +35,8 @@ const getDataList = async (req, res) => {
     
     // 查询最新上传的文件
     const latestFile = await ExcelData.findOne({
-      attributes: ['fileName'],
-      order: [['createdAt', 'DESC']]
+      attributes: ['filename'],
+      order: [['created_at', 'DESC']]
     });
     
     if (!latestFile) {
@@ -49,10 +49,10 @@ const getDataList = async (req, res) => {
     }
     
     // 设置默认排序
-    let orderConfig = [['rowIndex', 'ASC']];
+    let orderConfig = [['rowindex', 'ASC']];
     
     // 处理自定义排序
-    if (sortField && sortField !== 'rowIndex') {
+    if (sortField && sortField !== 'rowindex') {
       // 注意：由于数据存储在JSON列中，排序字段需要作为JSON路径处理
       // 使用sequelize.json方法来访问data列中的JSON字段
       const direction = sortOrder === 'ascend' ? 'ASC' : sortOrder === 'descend' ? 'DESC' : 'ASC';
@@ -67,7 +67,7 @@ const getDataList = async (req, res) => {
     
     // 构建筛选条件
     const whereCondition = {
-      fileName: latestFile.fileName
+      filename: latestFile.filename
     };
     
     // 处理筛选条件
@@ -93,6 +93,7 @@ const getDataList = async (req, res) => {
     // 处理搜索关键字
     if (searchKeywords && Object.keys(searchKeywords).length > 0) {
       const searchConditions = [];
+      const queryParams = [];
       
       // 为每个搜索字段构建ILIKE条件
       for (const [field, keyword] of Object.entries(searchKeywords)) {
@@ -144,14 +145,14 @@ const getFileList = async (req, res) => {
   try {
     const files = await ExcelData.findAll({
       attributes: [
-        'fileName', 
-        'originalName', 
-        'sheetName',
+        'filename', 
+        'originalname', 
+        'sheetname',
         [sequelize.fn('COUNT', sequelize.col('id')), 'rowCount'],
-        [sequelize.fn('MAX', sequelize.col('createdAt')), 'uploadedAt']
+        [sequelize.fn('MAX', sequelize.col('created_at')), 'uploadedAt']
       ],
-      group: ['fileName', 'originalName', 'sheetName'],
-      order: [[sequelize.fn('MAX', sequelize.col('createdAt')), 'DESC']]
+      group: ['filename', 'originalname', 'sheetname'],
+      order: [[sequelize.fn('MAX', sequelize.col('created_at')), 'DESC']]
     });
     
     res.status(200).json({
@@ -172,7 +173,7 @@ const getFileList = async (req, res) => {
  */
 const getDataByFileName = async (req, res) => {
   try {
-    const { fileName } = req.params;
+    const { filename } = req.params;
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
     const offset = (page - 1) * pageSize;
@@ -200,10 +201,10 @@ const getDataByFileName = async (req, res) => {
     }
     
     // 设置默认排序
-    let orderConfig = [['rowIndex', 'ASC']];
+    let orderConfig = [['rowindex', 'ASC']];
     
     // 处理自定义排序
-    if (sortField && sortField !== 'rowIndex') {
+    if (sortField && sortField !== 'rowindex') {
       // 构建排序配置，访问JSON数据中的字段
       const direction = sortOrder === 'ascend' ? 'ASC' : sortOrder === 'descend' ? 'DESC' : 'ASC';
       orderConfig = [
@@ -213,7 +214,7 @@ const getDataByFileName = async (req, res) => {
     
     // 构建筛选条件
     const whereCondition = {
-      fileName: fileName
+      filename: filename
     };
     
     // 处理筛选条件
@@ -238,6 +239,7 @@ const getDataByFileName = async (req, res) => {
     // 处理搜索关键字
     if (searchKeywords && Object.keys(searchKeywords).length > 0) {
       const searchConditions = [];
+      const queryParams = [];
       
       // 为每个搜索字段构建ILIKE条件
       for (const [field, keyword] of Object.entries(searchKeywords)) {
@@ -255,6 +257,7 @@ const getDataByFileName = async (req, res) => {
       }
     }
     
+    // 使用文件名查询数据
     const { count, rows } = await ExcelData.findAndCountAll({
       where: whereCondition,
       order: orderConfig,
@@ -273,7 +276,7 @@ const getDataByFileName = async (req, res) => {
       pageSize
     });
   } catch (error) {
-    console.error('按文件名获取数据时出错:', error);
+    console.error('获取数据时出错:', error);
     res.status(500).json({
       success: false,
       message: `获取数据失败: ${error.message}`

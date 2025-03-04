@@ -35,16 +35,29 @@ function isPortInUse(port) {
   });
 }
 
-// 终止占用端口的进程（仅在 Windows 系统下）
+// 终止占用端口的进程（支持macOS和Windows系统）
 async function killProcessOnPort(port) {
   return new Promise((resolve, reject) => {
     const { exec } = require('child_process');
-    // Windows 命令查找并终止进程
-    const command = `for /f "tokens=5" %a in ('netstat -aon ^| find ":${port}"') do taskkill /F /PID %a`;
+    let command;
+    
+    // 根据操作系统选择命令
+    if (process.platform === 'win32') {
+      // Windows命令
+      command = `for /f "tokens=5" %a in ('netstat -aon ^| find ":${port}"') do taskkill /F /PID %a`;
+    } else if (process.platform === 'darwin' || process.platform === 'linux') {
+      // macOS/Linux命令
+      command = `lsof -i :${port} | grep LISTEN | awk '{print $2}' | xargs kill -9`;
+    } else {
+      console.log(`不支持的操作系统: ${process.platform}`);
+      resolve(false);
+      return;
+    }
     
     exec(command, (error, stdout, stderr) => {
       if (error) {
         console.log(`端口 ${port} 未被占用或进程释放失败`);
+        console.log(`原因: ${error.message}`);
         resolve(false);
       } else {
         console.log(`端口 ${port} 已释放`);
@@ -72,7 +85,7 @@ async function startServer() {
     console.log('数据库连接成功');
     
     // 同步数据库模型
-    await sequelize.sync();
+    await sequelize.sync({ alter: false });
     console.log('数据库已同步');
     
     // 检查端口是否被占用
