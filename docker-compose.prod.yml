@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: excel-viewer-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME:-excel_viewer}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "127.0.0.1:5432:5432"  # 仅允许本地连接
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 后端API服务
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: excel-viewer-api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-excel_viewer}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      UPLOAD_DIR: uploads
+    ports:
+      - "127.0.0.1:3000:3000"  # 仅允许本地连接
+    volumes:
+      - ./server/uploads:/app/uploads
+      - ./logs:/app/logs
+    networks:
+      - app-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 前端服务
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: excel-viewer-client
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ssl:/etc/nginx/ssl  # SSL证书
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf  # Nginx配置
+    networks:
+      - app-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 备份服务（可选）
+  backup:
+    image: postgres:16-alpine
+    container_name: excel-viewer-backup
+    depends_on:
+      - postgres
+    volumes:
+      - ./backups:/backups
+    networks:
+      - app-network
+    command: >
+      sh -c 'while true; do
+        pg_dump -h postgres -U ${DB_USER:-postgres} -d ${DB_NAME:-excel_viewer} -f /backups/backup_$(date +"%Y%m%d_%H%M%S").sql;
+        echo "数据库备份已创建";
+        sleep 86400;
+      done'
+    environment:
+      PGPASSWORD: ${DB_PASSWORD:-postgres}
+    restart: always
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data: 
