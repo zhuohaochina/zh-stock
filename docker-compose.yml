@@ -51,7 +51,7 @@ services:
     restart: always
     depends_on:
       - api
-    ports:
+    # ports:
       # 删除或注释掉这部分
       # - "80:80"
     networks:
