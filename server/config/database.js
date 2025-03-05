@@ -2,10 +2,11 @@ const { Sequelize } = require('sequelize');
 
 const sequelize = new Sequelize({
   dialect: 'postgres',
-  host: 'localhost',
-  username: 'postgres',
-  password: '123456',
-  database: 'stock',
+  host: process.env.DB_HOST || 'postgres',
+  port: process.env.DB_PORT || 5432,
+  username: process.env.DB_USER || 'postgres',
+  password: process.env.DB_PASSWORD || '123456',
+  database: process.env.DB_NAME || 'stock',
   logging: false,
   define: {
     timestamps: true,
