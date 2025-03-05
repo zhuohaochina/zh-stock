@@ -3,7 +3,7 @@ const sequelize = require('../config/database');
 
 // 定义一个动态的Excel数据模型
 // 我们使用JSONB类型来存储每行数据，这样可以灵活处理不同结构的Excel文件
-const ExcelData = sequelize.define('ExcelData', {
+const excel_data = sequelize.define('excel_data', {
   // 文件信息
   filename: {
     type: DataTypes.STRING,
@@ -40,4 +40,4 @@ const ExcelData = sequelize.define('ExcelData', {
   updatedAt: 'updated_at'
 });
 
-module.exports = ExcelData; 
+module.exports = excel_data; 

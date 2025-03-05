@@ -8,7 +8,7 @@ const client = new Client({
   password: '123456'
 });
 
-async function checkTables() {
+async function check_tables() {
   try {
     await client.connect();
     console.log('已连接到数据库');
@@ -36,4 +36,4 @@ async function checkTables() {
   }
 }
 
-checkTables(); 
+check_tables(); 

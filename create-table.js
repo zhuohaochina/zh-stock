@@ -8,20 +8,20 @@ const client = new Client({
   password: '123456'
 });
 
-async function createTable() {
+async function create_table() {
   try {
     await client.connect();
     console.log('已连接到数据库');
     
     // 先检查表是否存在，若不存在则创建
-    const tableExists = await client.query(`
+    const table_exists = await client.query(`
       SELECT EXISTS (
         SELECT FROM information_schema.tables 
         WHERE table_name = 'excel_data'
       );
     `);
     
-    if (!tableExists.rows[0].exists) {
+    if (!table_exists.rows[0].exists) {
       console.log('表excel_data不存在，开始创建...');
       
       // 创建excel_data表
@@ -58,4 +58,4 @@ async function createTable() {
   }
 }
 
-createTable(); 
+create_table(); 

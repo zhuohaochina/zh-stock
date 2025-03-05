@@ -21,7 +21,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api', routes);
 
 // 检查端口是否被占用
-function isPortInUse(port) {
+function is_port_in_use(port) {
   return new Promise((resolve) => {
     const server = net.createServer()
       .once('error', () => {
@@ -36,7 +36,7 @@ function isPortInUse(port) {
 }
 
 // 终止占用端口的进程（支持macOS和Windows系统）
-async function killProcessOnPort(port) {
+async function kill_process_on_port(port) {
   return new Promise((resolve, reject) => {
     const { exec } = require('child_process');
     let command;
@@ -78,7 +78,7 @@ app.use((err, req, res, next) => {
 });
 
 // 启动服务器
-async function startServer() {
+async function start_server() {
   try {
     // 检查数据库连接
     await sequelize.authenticate();
@@ -89,10 +89,10 @@ async function startServer() {
     console.log('数据库已同步');
     
     // 检查端口是否被占用
-    const portInUse = await isPortInUse(PORT);
-    if (portInUse) {
+    const port_in_use = await is_port_in_use(PORT);
+    if (port_in_use) {
       console.log(`端口 ${PORT} 被占用，尝试释放...`);
-      await killProcessOnPort(PORT);
+      await kill_process_on_port(PORT);
       // 等待端口释放
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
@@ -108,4 +108,4 @@ async function startServer() {
 }
 
 // 启动服务器
-startServer(); 
+start_server(); 

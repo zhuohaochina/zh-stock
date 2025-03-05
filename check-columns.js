@@ -8,7 +8,7 @@ const client = new Client({
   password: '123456'
 });
 
-async function checkColumns() {
+async function check_columns() {
   try {
     await client.connect();
     console.log('已连接到数据库');
@@ -33,4 +33,4 @@ async function checkColumns() {
   }
 }
 
-checkColumns(); 
+check_columns(); 

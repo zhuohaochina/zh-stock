@@ -1,4 +1,4 @@
-const { ExcelData } = require('../models');
+const { excel_data } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 
@@ -7,6 +7,8 @@ const sequelize = require('../config/database');
  */
 const getDataList = async (req, res) => {
   try {
+    console.log('===== 搜索请求开始 =====');
+    console.log('请求参数:', req.query);
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
     const offset = (page - 1) * pageSize;
@@ -19,6 +21,7 @@ const getDataList = async (req, res) => {
     if (req.query.filters) {
       try {
         filters = JSON.parse(req.query.filters);
+        console.log('解析到的筛选条件:', filters);
       } catch (error) {
         console.error('解析筛选参数时出错:', error);
       }
@@ -28,13 +31,14 @@ const getDataList = async (req, res) => {
     if (req.query.searchKeywords) {
       try {
         searchKeywords = JSON.parse(req.query.searchKeywords);
+        console.log('解析到的搜索关键字:', searchKeywords);
       } catch (error) {
         console.error('解析搜索关键字参数时出错:', error);
       }
     }
     
     // 查询最新上传的文件
-    const latestFile = await ExcelData.findOne({
+    const latestFile = await excel_data.findOne({
       attributes: ['filename'],
       order: [['created_at', 'DESC']]
     });
@@ -111,16 +115,41 @@ const getDataList = async (req, res) => {
       }
     }
     
-    // 使用最新文件名查询数据
-    const { count, rows } = await ExcelData.findAndCountAll({
+    // 如果有搜索条件，添加到查询中
+    if (searchConditions.length > 0) {
+      // 创建原始SQL WHERE子句，使用AND将所有不同类型的条件连接起来
+      const searchSql = searchConditions.join(' AND ');
+      whereCondition[Op.and] = sequelize.literal(`(${searchSql})`);
+      
+      console.log('搜索SQL:', searchSql);
+    }
+    
+    // 添加详细日志，打印完整查询对象
+    console.log('最终查询对象:', JSON.stringify(whereCondition, null, 2));
+    
+    // 启用SQL日志
+    const queryOptions = {
       where: whereCondition,
       order: orderConfig,
       limit: pageSize,
-      offset: offset
-    });
+      offset: offset,
+      logging: (sql) => console.log('执行的SQL查询:', sql)
+    };
+    
+    // 执行查询
+    const { count, rows } = await excel_data.findAndCountAll(queryOptions);
     
     // 提取数据部分
     const data = rows.map(item => item.data);
+    
+    // 打印最终查询结果统计
+    console.log('查询结果统计:', {
+      total: count,
+      返回数据条数: data.length,
+      页码: page,
+      每页条数: pageSize
+    });
+    console.log('===== 搜索请求结束 =====\n');
     
     res.status(200).json({
       success: true,
@@ -143,7 +172,7 @@ const getDataList = async (req, res) => {
  */
 const getFileList = async (req, res) => {
   try {
-    const files = await ExcelData.findAll({
+    const files = await excel_data.findAll({
       attributes: [
         'filename', 
         'originalname', 
@@ -173,7 +202,10 @@ const getFileList = async (req, res) => {
  */
 const getDataByFileName = async (req, res) => {
   try {
-    const { filename } = req.params;
+    console.log('===== 按文件名搜索请求开始 =====');
+    console.log('请求参数:', req.query);
+    console.log('文件名:', req.params.filename);
+    const filename = req.params.filename;
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
     const offset = (page - 1) * pageSize;
@@ -186,6 +218,7 @@ const getDataByFileName = async (req, res) => {
     if (req.query.filters) {
       try {
         filters = JSON.parse(req.query.filters);
+        console.log('解析到的筛选条件:', filters);
       } catch (error) {
         console.error('解析筛选参数时出错:', error);
       }
@@ -195,6 +228,7 @@ const getDataByFileName = async (req, res) => {
     if (req.query.searchKeywords) {
       try {
         searchKeywords = JSON.parse(req.query.searchKeywords);
+        console.log('解析到的搜索关键字:', searchKeywords);
       } catch (error) {
         console.error('解析搜索关键字参数时出错:', error);
       }
@@ -257,16 +291,41 @@ const getDataByFileName = async (req, res) => {
       }
     }
     
-    // 使用文件名查询数据
-    const { count, rows } = await ExcelData.findAndCountAll({
+    // 如果有搜索条件，添加到查询中
+    if (searchConditions.length > 0) {
+      // 创建原始SQL WHERE子句，使用AND将所有不同类型的条件连接起来
+      const searchSql = searchConditions.join(' AND ');
+      whereCondition[Op.and] = sequelize.literal(`(${searchSql})`);
+      
+      console.log('搜索SQL:', searchSql);
+    }
+    
+    // 添加详细日志，打印完整查询对象
+    console.log('最终查询对象:', JSON.stringify(whereCondition, null, 2));
+    
+    // 启用SQL日志
+    const queryOptions = {
       where: whereCondition,
       order: orderConfig,
       limit: pageSize,
-      offset: offset
-    });
+      offset: offset,
+      logging: (sql) => console.log('执行的SQL查询:', sql)
+    };
+    
+    // 执行查询
+    const { count, rows } = await excel_data.findAndCountAll(queryOptions);
     
     // 提取数据部分
     const data = rows.map(item => item.data);
+    
+    // 打印最终查询结果统计
+    console.log('查询结果统计:', {
+      total: count,
+      返回数据条数: data.length,
+      页码: page,
+      每页条数: pageSize
+    });
+    console.log('===== 按文件名搜索请求结束 =====\n');
     
     res.status(200).json({
       success: true,

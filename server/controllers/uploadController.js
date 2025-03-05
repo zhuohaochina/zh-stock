@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { parseExcel } = require('../utils/excelParser');
-const { ExcelData } = require('../models');
+const { excel_data } = require('../models');
 const { Op } = require('sequelize');
 const { createTableFromExcel, insertDataToTable, getDynamicTables } = require('../utils/tableBuilder');
 
@@ -57,9 +57,9 @@ const upload = multer({
 const cleanupOldData = async (fileName) => {
   try {
     // 删除与此文件名相关的所有现有数据
-    await ExcelData.destroy({
+    await excel_data.destroy({
       where: {
-        fileName: fileName
+        filename: fileName
       }
     });
   } catch (error) {
@@ -124,16 +124,16 @@ const handleUpload = (req, res) => {
       
       // 获取是否要动态创建表及表名
       // 正确处理布尔值或字符串类型的参数
-      const createDynamicTable = req.body.createDynamicTable === true || req.body.createDynamicTable === 'true';
-      let tableName = req.body.tableName || 'demo';
-      const forceRecreate = req.body.forceRecreate === true || req.body.forceRecreate === 'true';
+      const createDynamicTable = req.body.create_dynamic_table === true || req.body.create_dynamic_table === 'true';
+      let tableName = req.body.table_name || 'demo';
+      const forceRecreate = req.body.force_recreate === true || req.body.force_recreate === 'true';
       
       // 记录参数处理结果
       console.log('处理后的参数:', {
         createDynamicTable,
         tableName,
         forceRecreate,
-        targetTableLocked: req.body.targetTableLocked
+        targetTableLocked: req.body.target_table_locked
       });
       
       let tableCreated = false;
@@ -178,18 +178,18 @@ const handleUpload = (req, res) => {
         const batches = [];
         for (let i = 0; i < data.length; i += batchSize) {
           const batch = data.slice(i, i + batchSize).map(row => ({
-            fileName: fileName,
-            originalName: req.file.originalname,
+            filename: fileName,
+            originalname: req.file.originalname,
             data: row.rowData,
-            rowIndex: row.rowIndex,
-            sheetName: sheetName
+            rowindex: row.rowIndex,
+            sheetname: sheetName
           }));
           batches.push(batch);
         }
         
         // 逐批保存数据
         for (const batch of batches) {
-          await ExcelData.bulkCreate(batch);
+          await excel_data.bulkCreate(batch);
         }
       }
       
@@ -209,7 +209,7 @@ const handleUpload = (req, res) => {
         recordCount: data.length,
         tableCreated,
         tableRecreated,
-        tableName: tableCreated ? tableName : null
+        tableName: tableCreated ? tableName : req.body.table_name || 'demo'
       });
       
       console.log(`文件 ${req.file.originalname} 成功处理，保存了 ${data.length} 条记录`);

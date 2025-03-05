@@ -56,32 +56,25 @@ const getTableStructure = async (req, res) => {
  */
 const getTableData = async (req, res) => {
   try {
+    console.log('===== 动态表搜索请求开始 =====');
+    console.log('请求参数:', req.query);
+    console.log('表名:', req.params.tableName);
+    
     const { tableName } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const pageSize = parseInt(req.query.pageSize) || 10;
-    const offset = (page - 1) * pageSize;
-    const sortField = req.query.sortField;
-    const sortOrder = req.query.sortOrder;
-    let filters = {};
-    let searchKeywords = {};
+    let { 
+      page = 1, 
+      page_size = 10, // 从page_size获取，默认值改为10
+      sort_field, 
+      sort_order, 
+      filters = '{}', 
+      search_keywords = '{}'
+    } = req.query;
     
-    // 解析筛选参数
-    if (req.query.filters) {
-      try {
-        filters = JSON.parse(req.query.filters);
-      } catch (error) {
-        console.error('解析筛选参数时出错:', error);
-      }
-    }
+    // 确保page和page_size是数字
+    page = parseInt(page);
+    page_size = parseInt(page_size);
     
-    // 解析搜索关键字参数
-    if (req.query.searchKeywords) {
-      try {
-        searchKeywords = JSON.parse(req.query.searchKeywords);
-      } catch (error) {
-        console.error('解析搜索关键字参数时出错:', error);
-      }
-    }
+    const offset = (page - 1) * page_size;
     
     if (!tableName) {
       return res.status(400).json({
@@ -102,6 +95,26 @@ const getTableData = async (req, res) => {
     // 获取表的列信息，包括原始表头
     const columns = await getTableColumns(tableName);
     
+    // 解析筛选参数
+    if (req.query.filters) {
+      try {
+        filters = JSON.parse(req.query.filters);
+      } catch (error) {
+        console.error('解析筛选参数时出错:', error);
+      }
+    }
+    
+    // 解析搜索关键字参数
+    if (req.query.search_keywords) {
+      try {
+        search_keywords = JSON.parse(req.query.search_keywords);
+        console.log('解析后的搜索关键词:', search_keywords);
+      } catch (error) {
+        console.error('解析搜索关键字参数时出错:', error);
+        search_keywords = {}; // 确保在解析错误时使用空对象
+      }
+    }
+    
     // 构建WHERE子句用于筛选和搜索
     let whereClause = '';
     let whereParams = [];
@@ -120,16 +133,34 @@ const getTableData = async (req, res) => {
           whereParams.push(...values);
         }
       }
+      console.log('筛选条件:', filters);
+      console.log('构建的条件数组:', conditions);
     }
     
     // 处理模糊搜索条件
-    if (Object.keys(searchKeywords).length > 0) {
+    if (Object.keys(search_keywords).length > 0) {
       const validColumns = columns.map(col => col.field);
+      const columnMapping = {};
+      
+      // 创建一个从header到field的映射
+      columns.forEach(col => {
+        columnMapping[col.header] = col.field;
+      });
+      
+      console.log('有效的列名(field):', validColumns);
+      console.log('列名映射(header->field):', columnMapping);
+      console.log('搜索字段名:', Object.keys(search_keywords));
+      
       const searchConditions = [];
       
       // 为每个搜索字段构建LIKE条件
-      for (const [field, keyword] of Object.entries(searchKeywords)) {
-        if (validColumns.includes(field) && keyword) {
+      for (const [key, keyword] of Object.entries(search_keywords)) {
+        // 尝试直接匹配field或通过header映射到field
+        const field = validColumns.includes(key) ? key : columnMapping[key];
+        
+        console.log(`检查字段 "${key}": 映射结果=${field}, 有效=${!!field}, 关键词=${keyword}`);
+        
+        if (field && keyword && keyword.trim() !== '') {
           // 创建字段的LIKE条件 (field LIKE '%keyword%')
           searchConditions.push(`"${field}" LIKE ?`);
           whereParams.push(`%${keyword}%`);
@@ -141,6 +172,8 @@ const getTableData = async (req, res) => {
         // 使用OR连接所有搜索条件
         conditions.push(`(${searchConditions.join(' OR ')})`);
       }
+      console.log('搜索关键词:', search_keywords);
+      console.log('构建的搜索条件:', searchConditions);
     }
     
     // 组合所有条件
@@ -148,37 +181,52 @@ const getTableData = async (req, res) => {
       whereClause = `WHERE ${conditions.join(' AND ')}`;
     }
     
+    console.log('最终WHERE子句:', whereClause);
+    console.log('参数数组:', whereParams);
+    
     // 获取总记录数（应用筛选条件）
+    const countQuery = `SELECT COUNT(*) as total FROM "${tableName}" ${whereClause}`;
+    console.log('执行计数SQL:', countQuery);
+    console.log('计数SQL参数:', whereParams);
+    
     const [countResult] = await sequelize.query(
-      `SELECT COUNT(*) as total FROM "${tableName}" ${whereClause}`,
+      countQuery,
       {
         replacements: whereParams
       }
     );
     const total = parseInt(countResult[0].total);
+    console.log('计数结果:', total);
     
     // 构建排序部分的SQL
     let orderClause = 'ORDER BY id';
     
     // 如果提供了排序字段和排序方向，则使用它们
-    if (sortField) {
+    if (sort_field) {
       // 验证排序字段是否存在于表中，以防SQL注入
       const validColumns = columns.map(col => col.field);
-      if (validColumns.includes(sortField)) {
-        const direction = sortOrder === 'ascend' ? 'ASC' : sortOrder === 'descend' ? 'DESC' : '';
+      if (validColumns.includes(sort_field)) {
+        const direction = sort_order === 'ascend' ? 'ASC' : sort_order === 'descend' ? 'DESC' : '';
         if (direction) {
-          orderClause = `ORDER BY "${sortField}" ${direction}`;
+          orderClause = `ORDER BY "${sort_field}" ${direction}`;
         }
       }
     }
     
     // 获取分页数据，应用筛选条件和排序
+    const dataQuery = `SELECT * FROM "${tableName}" ${whereClause} ${orderClause} LIMIT ? OFFSET ?`;
+    console.log('执行数据查询SQL:', dataQuery);
+    console.log('数据SQL参数:', [...whereParams, page_size, offset]);
+    
     const [rows] = await sequelize.query(
-      `SELECT * FROM "${tableName}" ${whereClause} ${orderClause} LIMIT ? OFFSET ?`,
+      dataQuery,
       {
-        replacements: [...whereParams, pageSize, offset]
+        replacements: [...whereParams, page_size, offset]
       }
     );
+    
+    console.log('查询结果行数:', rows.length);
+    console.log('===== 动态表搜索请求完成 =====');
     
     res.status(200).json({
       success: true,
@@ -186,7 +234,7 @@ const getTableData = async (req, res) => {
       columns: columns, // 添加列信息，包括表头
       total,
       page,
-      pageSize
+      page_size
     });
   } catch (error) {
     console.error('获取表数据时出错:', error);
